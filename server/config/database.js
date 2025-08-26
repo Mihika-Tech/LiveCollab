@@ -71,11 +71,30 @@ const db = {
 
     // Room operations
     rooms: {
-        async create(roomId, name, description, createdBy) {
+        async create(roomId, name, description, createdBy, isPrivate = false, password = null) {
             await db.query(
-                'INSERT INTO rooms (id, name, description, created_by) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE updated_at = CURRENT_TIMESTAMP',
-                [roomId, name, description, createdBy]
+                `INSERT INTO rooms (id, name, description, created_by, is_private, password) 
+                VALUES (?, ?, ?, ?, ?, ?) 
+                ON DUPLICATE KEY UPDATE updated_at = CURRENT_TIMESTAMP`,
+                [roomId, name, description, createdBy, isPrivate, password]
             );
+            
+            // Create default customization
+            await db.query(
+                'INSERT INTO room_customizations (room_id) VALUES (?)',
+                [roomId]
+            );
+            
+            // Set creator as owner
+            await db.query(
+                `INSERT IGNORE INTO room_permissions (room_id, role, can_broadcast, can_kick_users, can_delete_messages, can_invite_users, can_manage_room)
+                VALUES 
+                (?, 'owner', TRUE, TRUE, TRUE, TRUE, TRUE),
+                (?, 'moderator', TRUE, TRUE, TRUE, TRUE, FALSE),
+                (?, 'member', TRUE, FALSE, FALSE, TRUE, FALSE)`,
+                [roomId, roomId, roomId]
+            );
+            
             return roomId;
         },
 
@@ -92,6 +111,29 @@ const db = {
                 [roomId]
             );
             return !!room;
+        },
+
+        async verifyPassword(roomId, password) {
+            const room = await this.findById(roomId);
+            if (!room || !room.is_private) return true;
+            
+            const bcrypt = require('bcryptjs');
+            return await bcrypt.compare(password, room.password);
+        },
+
+        async updateSettings(roomId, settings) {
+            const { isPrivate, password, maxParticipants } = settings;
+            let hashedPassword = null;
+            
+            if (isPrivate && password) {
+                const bcrypt = require('bcryptjs');
+                hashedPassword = await bcrypt.hash(password, 10);
+            }
+            
+            await db.query(
+                `UPDATE rooms SET is_private = ?, password = ?, max_participants = ? WHERE id = ?`,
+                [isPrivate, hashedPassword, maxParticipants, roomId]
+            );
         }
     },
 
@@ -106,14 +148,20 @@ const db = {
         },
 
         async getHistory(roomId, limit = 50) {
+            // Fix: Use template literal for LIMIT
+            const limitNum = parseInt(limit) || 50;
             return await db.query(
-                'SELECT user_id as id, user_name as name, message, created_at as timestamp FROM messages WHERE room_id = ? ORDER BY created_at DESC LIMIT ?',
-                [roomId, parseInt(limit)]
+                `SELECT user_id as id, user_name as name, message, created_at as timestamp 
+                FROM messages 
+                WHERE room_id = ? 
+                ORDER BY created_at DESC 
+                LIMIT ${limitNum}`,
+                [roomId]
             );
         },
 
         async getLatest(roomId, limit = 50) {
-            const messages = await this.getHistory(roomId, parseInt(limit));
+            const messages = await this.getHistory(roomId, limit);
             return messages.reverse(); // Return in chronological order
         }
     },
@@ -171,6 +219,80 @@ const db = {
             );
         }
     },
+    roomSecurity: {
+    async getUserRole(roomId, userId) {
+        const result = await db.queryOne(
+            'SELECT role FROM room_users WHERE room_id = ? AND user_id = ?',
+            [roomId, userId]
+        );
+        return result ? result.role : null;
+    },
+
+    async updateUserRole(roomId, userId, role) {
+        await db.query(
+            'UPDATE room_users SET role = ? WHERE room_id = ? AND user_id = ?',
+            [role, roomId, userId]
+        );
+    },
+
+    async getPermissions(roomId, role) {
+        return await db.queryOne(
+            'SELECT * FROM room_permissions WHERE room_id = ? AND role = ?',
+            [roomId, role]
+        );
+    },
+
+    async updatePermissions(roomId, role, permissions) {
+        const fields = Object.keys(permissions).map(key => `${key} = ?`).join(', ');
+        const values = Object.values(permissions);
+        
+        await db.query(
+            `UPDATE room_permissions SET ${fields} WHERE room_id = ? AND role = ?`,
+            [...values, roomId, role]
+        );
+    },
+
+    async canUserPerformAction(roomId, userId, action) {
+        const role = await this.getUserRole(roomId, userId);
+        if (!role) return false;
+        
+        const permissions = await this.getPermissions(roomId, role);
+        return permissions ? permissions[action] : false;
+    }
+},
+
+roomCustomization: {
+    async get(roomId) {
+        return await db.queryOne(
+            'SELECT * FROM room_customizations WHERE room_id = ?',
+            [roomId]
+        );
+    },
+
+    async update(roomId, customizations) {
+        const fields = Object.keys(customizations).map(key => `${key} = ?`).join(', ');
+        const values = Object.values(customizations);
+        
+        await db.query(
+            `UPDATE room_customizations SET ${fields} WHERE room_id = ?`,
+            [...values, roomId]
+        );
+    },
+
+    async getTheme(roomId) {
+        const custom = await this.get(roomId);
+        if (!custom) return null;
+        
+        return {
+            primaryColor: custom.primary_color,
+            backgroundColor: custom.background_color,
+            textColor: custom.text_color,
+            accentColor: custom.accent_color,
+            logoUrl: custom.logo_url,
+            welcomeMessage: custom.welcome_message
+        };
+    }
+},
 
     // Analytics operations
     analytics: {

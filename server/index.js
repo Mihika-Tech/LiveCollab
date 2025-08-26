@@ -5,6 +5,7 @@ const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const db = require("./config/database");
+const { authenticateToken, checkRoomAccess, requirePermission } = require('./middleware/roomAuth');
 
 const app = express();
 const httpServer = createServer(app);
@@ -148,6 +149,261 @@ app.post("/api/auth/login", async (req, res) => {
     }
 });
 
+app.post("/api/rooms/create", authenticateToken, async (req, res) => {
+    try {
+        const { roomId, name, description, isPrivate, password, maxParticipants } = req.body;
+        const userId = req.user.id;
+        
+        // Check if room already exists
+        if (await db.rooms.exists(roomId)) {
+            return res.status(400).json({ message: "Room ID already exists" });
+        }
+        
+        // Hash password if private room
+        let hashedPassword = null;
+        if (isPrivate && password) {
+            hashedPassword = await bcrypt.hash(password, 10);
+        }
+        
+        // Create room
+        await db.rooms.create(roomId, name, description, userId, isPrivate, hashedPassword);
+        
+        // Set max participants if provided
+        if (maxParticipants) {
+            await db.query(
+                'UPDATE rooms SET max_participants = ? WHERE id = ?',
+                [maxParticipants, roomId]
+            );
+        }
+        
+        res.json({ 
+            success: true, 
+            roomId,
+            message: "Room created successfully" 
+        });
+    } catch (error) {
+        console.error("Create room error:", error);
+        res.status(500).json({ message: "Failed to create room" });
+    }
+});
+
+// Verify room access (for joining private rooms)
+app.post("/api/rooms/:roomId/verify-access", authenticateToken, async (req, res) => {
+    try {
+        const { roomId } = req.params;
+        const { password } = req.body;
+        
+        const room = await db.rooms.findById(roomId);
+        if (!room) {
+            return res.status(404).json({ message: "Room not found" });
+        }
+        
+        if (room.is_private) {
+            const isValid = await db.rooms.verifyPassword(roomId, password);
+            if (!isValid) {
+                return res.status(403).json({ message: "Invalid password" });
+            }
+        }
+        
+        res.json({ 
+            access: true,
+            room: {
+                id: room.id,
+                name: room.name,
+                description: room.description
+            }
+        });
+    } catch (error) {
+        console.error("Verify access error:", error);
+        res.status(500).json({ message: "Verification failed" });
+    }
+});
+
+// Get room settings (for room owners/moderators)
+app.get("/api/rooms/:roomId/settings", authenticateToken, checkRoomAccess, async (req, res) => {
+    try {
+        const { roomId } = req.params;
+        const userId = req.user.id;
+        
+        // Check if user is owner or moderator
+        const role = await db.roomSecurity.getUserRole(roomId, userId);
+        if (!['owner', 'moderator'].includes(role)) {
+            return res.status(403).json({ message: "Access denied" });
+        }
+        
+        const room = await db.rooms.findById(roomId);
+        const customization = await db.roomCustomization.get(roomId);
+        const permissions = {
+            owner: await db.roomSecurity.getPermissions(roomId, 'owner'),
+            moderator: await db.roomSecurity.getPermissions(roomId, 'moderator'),
+            member: await db.roomSecurity.getPermissions(roomId, 'member')
+        };
+        
+        res.json({
+            room: {
+                ...room,
+                password: undefined // Don't send hashed password
+            },
+            customization,
+            permissions,
+            userRole: role
+        });
+    } catch (error) {
+        console.error("Get settings error:", error);
+        res.status(500).json({ message: "Failed to get settings" });
+    }
+});
+
+// Update room security settings
+app.put("/api/rooms/:roomId/security", 
+    authenticateToken, 
+    checkRoomAccess, 
+    requirePermission('can_manage_room'), 
+    async (req, res) => {
+    try {
+        const { roomId } = req.params;
+        const { isPrivate, password, maxParticipants, permissions } = req.body;
+        
+        // Update room settings
+        await db.rooms.updateSettings(roomId, { isPrivate, password, maxParticipants });
+        
+        // Update permissions if provided
+        if (permissions) {
+            for (const [role, perms] of Object.entries(permissions)) {
+                await db.roomSecurity.updatePermissions(roomId, role, perms);
+            }
+        }
+        
+        res.json({ success: true, message: "Security settings updated" });
+    } catch (error) {
+        console.error("Update security error:", error);
+        res.status(500).json({ message: "Failed to update security settings" });
+    }
+});
+
+// Update room customization
+app.put("/api/rooms/:roomId/customization", 
+    authenticateToken, 
+    checkRoomAccess, 
+    requirePermission('can_manage_room'), 
+    async (req, res) => {
+    try {
+        const { roomId } = req.params;
+        const customizations = req.body;
+        
+        // Validate color formats
+        const colorFields = ['primaryColor', 'backgroundColor', 'textColor', 'accentColor'];
+        for (const field of colorFields) {
+            if (customizations[field] && !/^#[0-9A-F]{6}$/i.test(customizations[field])) {
+                return res.status(400).json({ message: `Invalid color format for ${field}` });
+            }
+        }
+        
+        // Convert camelCase to snake_case for database
+        const dbCustomizations = {};
+        if (customizations.primaryColor) dbCustomizations.primary_color = customizations.primaryColor;
+        if (customizations.backgroundColor) dbCustomizations.background_color = customizations.backgroundColor;
+        if (customizations.textColor) dbCustomizations.text_color = customizations.textColor;
+        if (customizations.accentColor) dbCustomizations.accent_color = customizations.accentColor;
+        if (customizations.logoUrl !== undefined) dbCustomizations.logo_url = customizations.logoUrl;
+        if (customizations.welcomeMessage !== undefined) dbCustomizations.welcome_message = customizations.welcomeMessage;
+        
+        // Feature toggles
+        const booleanFields = ['enableChat', 'enableVideo', 'enableScreenShare', 'enableRecordings', 'enableAnalytics', 'autoRecord'];
+        for (const field of booleanFields) {
+            if (customizations[field] !== undefined) {
+                dbCustomizations[field.replace(/([A-Z])/g, '_$1').toLowerCase()] = customizations[field];
+            }
+        }
+        
+        await db.roomCustomization.update(roomId, dbCustomizations);
+        
+        // Emit customization update to all users in room
+        io.to(roomId).emit("customizationUpdated", customizations);
+        
+        res.json({ success: true, message: "Customization updated" });
+    } catch (error) {
+        console.error("Update customization error:", error);
+        res.status(500).json({ message: "Failed to update customization" });
+    }
+});
+
+// Get room theme (public endpoint for room participants)
+app.get("/api/rooms/:roomId/theme", async (req, res) => {
+    try {
+        const { roomId } = req.params;
+        const theme = await db.roomCustomization.getTheme(roomId);
+        res.json(theme || {});
+    } catch (error) {
+        console.error("Get theme error:", error);
+        res.status(500).json({ message: "Failed to get theme" });
+    }
+});
+
+// Update user role
+app.put("/api/rooms/:roomId/users/:userId/role", 
+    authenticateToken, 
+    checkRoomAccess, 
+    requirePermission('can_manage_room'), 
+    async (req, res) => {
+    try {
+        const { roomId, userId: targetUserId } = req.params;
+        const { role } = req.body;
+        const requestingUserId = req.user.id;
+        
+        // Can't change own role
+        if (requestingUserId === parseInt(targetUserId)) {
+            return res.status(400).json({ message: "Cannot change your own role" });
+        }
+        
+        // Only owner can assign owner role
+        const requestingUserRole = await db.roomSecurity.getUserRole(roomId, requestingUserId);
+        if (role === 'owner' && requestingUserRole !== 'owner') {
+            return res.status(403).json({ message: "Only room owner can transfer ownership" });
+        }
+        
+        await db.roomSecurity.updateUserRole(roomId, targetUserId, role);
+        
+        // Notify user of role change
+        io.to(roomId).emit("userRoleChanged", {
+            userId: targetUserId,
+            newRole: role
+        });
+        
+        res.json({ success: true, message: "User role updated" });
+    } catch (error) {
+        console.error("Update role error:", error);
+        res.status(500).json({ message: "Failed to update user role" });
+    }
+});
+
+// Kick user from room
+app.delete("/api/rooms/:roomId/users/:userId", 
+    authenticateToken, 
+    checkRoomAccess, 
+    requirePermission('can_kick_users'), 
+    async (req, res) => {
+    try {
+        const { roomId, userId: targetUserId } = req.params;
+        
+        await db.roomUsers.removeUser(roomId, targetUserId);
+        
+        // Find user's socket and disconnect them
+        const sockets = await io.in(roomId).fetchSockets();
+        for (const socket of sockets) {
+            if (socket.userId === parseInt(targetUserId)) {
+                socket.emit("kicked", { message: "You have been removed from the room" });
+                socket.disconnect();
+            }
+        }
+        
+        res.json({ success: true, message: "User removed from room" });
+    } catch (error) {
+        console.error("Kick user error:", error);
+        res.status(500).json({ message: "Failed to remove user" });
+    }
+});
+
 // Get room info endpoint
 app.get("/api/rooms/:roomId", async (req, res) => {
     try {
@@ -277,124 +533,172 @@ io.use(async (socket, next) => {
 io.on("connection", (socket) => {
     console.log(`User connected: ${socket.userName} (${socket.userId})`);
     
-    socket.on("joinRoom", async (roomId) => {
-        try {
-            // Create room if it doesn't exist
-            const roomExists = await db.rooms.exists(roomId);
-            if (!roomExists) {
-                await db.rooms.create(roomId, `Room ${roomId}`, `Auto-created room`, socket.userId);
-                // Initialize room metrics
-                await db.query(
-                    'INSERT IGNORE INTO room_metrics (room_id) VALUES (?)',
-                    [roomId]
-                );
+    socket.on("joinRoom", async (roomId, password = null) => {
+    try {
+        // Check room exists and verify password if needed
+        const room = await db.rooms.findById(roomId);
+        if (!room) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            const retryRoom = await db.rooms.findById(roomId);
+            
+            if (!retryRoom) {
+                socket.emit("error", { message: "Room not found" });
+                return;
             }
-
-            // Add user to room
-            await db.roomUsers.addUser(roomId, socket.userId, socket.userName, socket.id);
-            socket.join(roomId);
-            
-            console.log(`${socket.userName} joined room ${roomId}`);
-            
-            // Analytics: Log user joined event
-            await db.analytics.logEvent(roomId, 'user_joined', socket.userId, socket.userName);
-            await db.analytics.startSession(roomId, socket.userId, socket.userName);
-            
-            // Update room metrics
-            const currentUsers = await db.roomUsers.getRoomUsers(roomId);
-            await db.analytics.updateRoomMetrics(roomId, {
-                current_users: currentUsers.length,
-                peak_users: currentUsers.length // Will be updated if it's higher
-            });
-            
-            // Send empty message history for now (to avoid the SQL error)
-            socket.emit("messageHistory", []);
-            
-            // Send current users list to the newly joined user
-            socket.emit("roomUsers", currentUsers);
-            
-            // Send room analytics to the user
-            const metrics = await db.analytics.getRoomMetrics(roomId);
-            socket.emit("roomMetrics", metrics);
-            
-            // Notify others in the room that someone joined
-            socket.to(roomId).emit("userJoined", {
-                message: `${socket.userName} joined the room`,
-                userId: socket.userId,
-                userName: socket.userName,
-                users: currentUsers
-            });
-            
-            // Send updated metrics to all users in the room
-            io.to(roomId).emit("metricsUpdate", { currentUsers: currentUsers.length });
-            
-        } catch (error) {
-            console.error("Join room error:", error);
-            socket.emit("error", { message: "Failed to join room" });
         }
-    });
+
+        const finalRoom = room || await db.rooms.findById(roomId);
+        
+        // For private rooms, check password
+        if (finalRoom.is_private && !password) {
+            socket.emit("error", { message: "Invalid room password" });
+            return;
+        }
+        
+        if (finalRoom.is_private && password) {
+            const isValid = await db.rooms.verifyPassword(roomId, password);
+            if (!isValid) {
+                socket.emit("error", { message: "Invalid room password" });
+                return;
+            }
+        }
+        
+        // Check participant limit
+        const currentUsers = await db.roomUsers.getRoomUsers(roomId);
+        const existingUser = currentUsers.find(u => u.id === socket.userId);
+        
+        if (!existingUser && currentUsers.length >= room.max_participants) {
+            socket.emit("error", { message: "Room is full" });
+            return;
+        }
+        
+        // Add user to room with role
+        const isCreator = room.created_by === socket.userId;
+        const role = existingUser ? existingUser.role : (isCreator ? 'owner' : 'member');
+        
+        await db.roomUsers.addUser(roomId, socket.userId, socket.userName, socket.id);
+        if (!existingUser) {
+            await db.roomSecurity.updateUserRole(roomId, socket.userId, role);
+        }
+        
+        socket.join(roomId);
+        socket.roomId = roomId; // Store for later use
+        
+        // Get user permissions
+        const permissions = await db.roomSecurity.getPermissions(roomId, role);
+        
+        // Get room customization
+        const customization = await db.roomCustomization.get(roomId);
+        
+        // Send room info to joined user
+        socket.emit("roomJoined", {
+            room: {
+                id: room.id,
+                name: room.name,
+                description: room.description,
+                isPrivate: room.is_private
+            },
+            role,
+            permissions,
+            customization
+        });
+        
+        // Rest of your existing joinRoom logic...
+        console.log(`${socket.userName} joined room ${roomId} as ${role}`);
+        
+        // Send message history
+        const messages = await db.messages.getLatest(roomId);
+        socket.emit("messageHistory", messages);
+        
+        // Update and send users list with roles
+        const updatedUsers = await db.query(
+            `SELECT u.user_id as id, u.user_name as name, u.role, u.joined_at 
+             FROM room_users u 
+             WHERE u.room_id = ? 
+             ORDER BY u.joined_at ASC`,
+            [roomId]
+        );
+        
+        socket.emit("roomUsers", updatedUsers);
+        
+        // Notify others
+        socket.to(roomId).emit("userJoined", {
+            message: `${socket.userName} joined the room`,
+            userId: socket.userId,
+            userName: socket.userName,
+            role: role,
+            users: updatedUsers
+        });
+        
+        // Analytics and metrics...
+        await db.analytics.logEvent(roomId, 'user_joined', socket.userId, socket.userName);
+        await db.analytics.startSession(roomId, socket.userId, socket.userName);
+        
+    } catch (error) {
+        console.error("Join room error:", error);
+        socket.emit("error", { message: "Failed to join room" });
+    }
+});
 
     socket.on("sendMessage", async ({roomId, message}) => {
-        try {
-            // Save message to database
-            await db.messages.create(roomId, socket.userId, socket.userName, message);
-            
-            // Analytics: Log message sent event
-            await db.analytics.logEvent(roomId, 'message_sent', socket.userId, socket.userName, { messageLength: message.length });
-            await db.analytics.incrementMessageCount(roomId, socket.userId);
-            
-            // Update room metrics
-            const metrics = await db.analytics.getRoomMetrics(roomId);
-            await db.analytics.updateRoomMetrics(roomId, {
-                total_messages: (metrics?.total_messages || 0) + 1
-            });
-            
-            // Update user activity
-            await db.roomUsers.updateActivity(roomId, socket.userId);
-
-            // Create message object
-            const messageData = {
-                id: socket.userId,
-                name: socket.userName,
-                message,
-                timestamp: new Date()
-            };
-            
-            // Send to ALL users in the room
-            io.to(roomId).emit("receiveMessage", messageData);
-            
-            // Send updated metrics to all users
-            io.to(roomId).emit("metricsUpdate", { 
-                totalMessages: (metrics?.total_messages || 0) + 1 
-            });
-            
-        } catch (error) {
-            console.error("Send message error:", error);
-            socket.emit("error", { message: "Failed to send message" });
+    try {
+        // Check if chat is enabled
+        const customization = await db.roomCustomization.get(roomId);
+        if (!customization.enable_chat) {
+            socket.emit("error", { message: "Chat is disabled in this room" });
+            return;
         }
-    });
+        
+        // Rest of your existing sendMessage logic...
+        await db.messages.create(roomId, socket.userId, socket.userName, message);
+        
+        const messageData = {
+            id: socket.userId,
+            name: socket.userName,
+            message,
+            timestamp: new Date()
+        };
+        
+        io.to(roomId).emit("receiveMessage", messageData);
+        
+    } catch (error) {
+        console.error("Send message error:", error);
+        socket.emit("error", { message: "Failed to send message" });
+    }
+});
 
     socket.on("startBroadcast", async (roomId) => {
-        try {
-            // Mark user as broadcaster in the room
-            await db.query(
-                'UPDATE room_users SET is_broadcaster = TRUE WHERE room_id = ? AND user_id = ?',
-                [roomId, socket.userId]
-            );
-            
-            // Notify all users in the room that broadcast started
-            socket.to(roomId).emit("broadcastStarted", {
-                broadcasterId: socket.userId,
-                broadcasterName: socket.userName,
-                broadcasterSocketId: socket.id  // Add socket ID for WebRTC
-            });
-            
-            console.log(`${socket.userName} started broadcasting in room ${roomId}`);
-        } catch (error) {
-            console.error("Start broadcast error:", error);
-            socket.emit("error", { message: "Failed to start broadcast" });
+    try {
+        // Check if video is enabled and user has permission
+        const customization = await db.roomCustomization.get(roomId);
+        if (!customization.enable_video) {
+            socket.emit("error", { message: "Video is disabled in this room" });
+            return;
         }
-    });
+        
+        const canBroadcast = await db.roomSecurity.canUserPerformAction(roomId, socket.userId, 'can_broadcast');
+        if (!canBroadcast) {
+            socket.emit("error", { message: "You don't have permission to broadcast" });
+            return;
+        }
+        
+        // Rest of your existing broadcast logic...
+        await db.query(
+            'UPDATE room_users SET is_broadcaster = TRUE WHERE room_id = ? AND user_id = ?',
+            [roomId, socket.userId]
+        );
+        
+        socket.to(roomId).emit("broadcastStarted", {
+            broadcasterId: socket.userId,
+            broadcasterName: socket.userName,
+            broadcasterSocketId: socket.id
+        });
+        
+    } catch (error) {
+        console.error("Start broadcast error:", error);
+        socket.emit("error", { message: "Failed to start broadcast" });
+    }
+});
 
     socket.on("stopBroadcast", async (roomId) => {
         try {
