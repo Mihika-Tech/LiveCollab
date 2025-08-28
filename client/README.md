@@ -1,69 +1,54 @@
-# React + TypeScript + Vite
+# LiveCollab
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+LiveCollab is a next-generation **live event collaboration platform** that combines real-time video broadcasting, interactive chat, and analytics—going beyond traditional video conferencing tools. Built with **React, TypeScript, WebRTC, Socket.IO, Node.js, and MySQL**, the platform aims to create highly interactive and customizable online collaboration experiences.
 
-Currently, two official plugins are available:
+---
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## 🚀 Current Features
 
-## Expanding the ESLint configuration
+- ✅ **Real-Time Video Broadcasting** with WebRTC  
+- ✅ **Peer-to-Peer Video Streaming** between participants  
+- ✅ **Chat + Video Integration** for seamless communication  
+- ✅ **User Authentication** with JWT + MySQL backend  
+- ✅ **Screen Sharing Functionality** for presentations/demos  
+- ✅ **Analytics Dashboard** for usage insights and engagement tracking
+- ✅ **Room Security** for password-protected rooms, role-based access (host vs participant), and moderation tools
+- ✅ **Room Customization** for personalized collaboration spaces  
+- ✅ **Scalable Architecture** with React + TypeScript frontend and Node.js backend  
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+---
 
-```js
-export default tseslint.config([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+## 🛠️ Tech Stack
 
-      // Remove tseslint.configs.recommended and replace with this
-      ...tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      ...tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      ...tseslint.configs.stylisticTypeChecked,
+**Frontend:** React, TypeScript  
+**Backend:** Node.js, Express, Socket.IO  
+**Database:** MySQL  
+**Real-Time Communication:** WebRTC + Socket.IO  
+**Authentication:** JWT (JSON Web Tokens)  
+**Analytics:** Custom dashboard for usage statistics  
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+---
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## Future Features
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+To differentiate LiveCollab from traditional platforms like Zoom, the following features are planned:
 
-export default tseslint.config([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+1. Collaborative Coding Platform
+
+- Integrated real-time code editor (Monaco/CodeMirror).
+- Multi-user editing with live cursors and syntax highlighting.
+- Language support + linting.
+- Optional execution sandbox for testing code snippets.
+
+2. Video Recording + Playback
+
+- Record live sessions and allow replay/download.
+- Store securely in cloud (e.g., AWS S3, GCP).
+
+3. Advanced Analytics
+
+- Track speaking time, engagement levels, participation heatmaps.
+
+4. Mobile App
+
+- Bring LiveCollab to Android and iOS.
