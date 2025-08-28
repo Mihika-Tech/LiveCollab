@@ -6,6 +6,7 @@ const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const db = require("./config/database");
 const { authenticateToken, checkRoomAccess, requirePermission } = require('./middleware/roomAuth');
+const rateLimit = require("express-rate-limit");
 
 const app = express();
 const httpServer = createServer(app);
@@ -17,7 +18,19 @@ const io = new Server(httpServer, {
 });
 
 // JWT secret - in production, use environment variable
-const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key-change-in-production";
+const JWT_SECRET = process.env.JWT_SECRET;
+
+const authLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000, // 1 hour
+    max: 5, // 5 requests per window
+    message: 'Too many attempts, please try again later'
+});
+
+const roomLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: 10,
+    message: 'Too many rooms created, please try again later'
+});
 
 // Middleware
 app.use(cors());
@@ -57,7 +70,7 @@ app.get("/health", async (req, res) => {
 });
 
 // Signup endpoint
-app.post("/api/auth/signup", async (req, res) => {
+app.post("/api/auth/signup", authLimiter, async (req, res) => {
     try {
         const { name, email, password } = req.body;
 
@@ -104,7 +117,7 @@ app.post("/api/auth/signup", async (req, res) => {
 });
 
 // Login endpoint
-app.post("/api/auth/login", async (req, res) => {
+app.post("/api/auth/login", authLimiter, async (req, res) => {
     try {
         const { email, password } = req.body;
 
@@ -149,7 +162,7 @@ app.post("/api/auth/login", async (req, res) => {
     }
 });
 
-app.post("/api/rooms/create", authenticateToken, async (req, res) => {
+app.post("/api/rooms/create", authenticateToken, roomLimiter, async (req, res) => {
     try {
         const { roomId, name, description, isPrivate, password, maxParticipants } = req.body;
         const userId = req.user.id;

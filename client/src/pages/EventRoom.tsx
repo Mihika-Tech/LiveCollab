@@ -8,6 +8,7 @@ import RoomSettings from "../components/RoomSettings";
 import UserManagement from "../components/UserManagement";
 import JoinPrivateRoomModal from "../components/JoinPrivateRoomModal";
 import type { Socket } from "socket.io-client";
+import { sanitizeMessage } from "../utils/sanitize";
 
 interface ChatMessage {
     id: string;
@@ -60,6 +61,7 @@ function EventRoom() {
   const [isConnected, setIsConnected] = useState(false);
   const [socket, setSocket] = useState<Socket | null>(null);
   const [usersInRoom, setUsersInRoom] = useState<RoomUser[]>([]);
+  const [isRoomLoading, setIsRoomLoading] = useState(true);
   
   // New state for room security and customization
   const [roomInfo, setRoomInfo] = useState<RoomInfo | null>(null);
@@ -113,9 +115,11 @@ function EventRoom() {
             setShowWelcomeMessage(true);
             setTimeout(() => setShowWelcomeMessage(false), 5000);
         }
+        setIsRoomLoading(false);
     });
 
     newSocket.on("error", (data: { message: string }) => {
+      setIsRoomLoading(false);
         if (data.message === "Invalid room password") {
             setShowPasswordModal(true);
             setJoinError(data.message);
@@ -205,16 +209,16 @@ function EventRoom() {
     return () => {
         newSocket.off("connect");
         newSocket.off("disconnect");
-        newSocket.off("roomJoined");
-        newSocket.off("error");
-        newSocket.off("receiveMessage");
-        newSocket.off("messageHistory");
-        newSocket.off("userJoined");
-        newSocket.off("userLeft");
-        newSocket.off("roomUsers");
-        newSocket.off("userRoleChanged");
-        newSocket.off("kicked");
-        newSocket.off("customizationUpdated");
+        // newSocket.off("roomJoined");
+        // newSocket.off("error");
+        // newSocket.off("receiveMessage");
+        // newSocket.off("messageHistory");
+        // newSocket.off("userJoined");
+        // newSocket.off("userLeft");
+        // newSocket.off("roomUsers");
+        // newSocket.off("userRoleChanged");
+        // newSocket.off("kicked");
+        // newSocket.off("customizationUpdated");
         newSocket.disconnect();
     };
   }, [roomId, navigate, location.state, user?.id, handleReceiveMessage]);
@@ -243,7 +247,8 @@ function EventRoom() {
 
   const sendMessage = () => {
     if (message.trim() && isConnected && socket && customization.enable_chat !== false) {
-        socket.emit("sendMessage", {roomId, message});
+      const sanitized = sanitizeMessage(message);
+        socket.emit("sendMessage", {roomId, message: sanitized});
         setMessage("");
     }
   };
