@@ -29,6 +29,26 @@ LiveCollab is a next-generation **live event collaboration platform** that combi
 
 ---
 
+## Screenshots
+
+<img width="1892" height="979" alt="Screenshot 2025-08-28 204044" src="https://github.com/user-attachments/assets/21e58dea-4d1c-448b-ab86-89c65741e4d9" />
+
+<img width="1904" height="988" alt="Screenshot 2025-08-28 204057" src="https://github.com/user-attachments/assets/f06e69a1-6779-4ac9-959c-16dbba587cc9" />
+
+<img width="1898" height="989" alt="Screenshot 2025-08-28 204116" src="https://github.com/user-attachments/assets/e42ad414-361c-42a2-8fcb-ca3ebd7c6ce8" />
+
+<img width="1888" height="979" alt="Screenshot 2025-08-28 204127" src="https://github.com/user-attachments/assets/e322d7b5-ba41-4987-9127-c6c4ac7f7145" />
+
+<img width="1886" height="981" alt="Screenshot 2025-08-28 204207" src="https://github.com/user-attachments/assets/3b01a99b-82d5-445f-9bd7-c74b759d8a90" />
+
+<img width="1893" height="981" alt="Screenshot 2025-08-28 204220" src="https://github.com/user-attachments/assets/5fda6b3d-5328-4778-ae1b-866e06aa0172" />
+
+<img width="1895" height="1017" alt="Screenshot 2025-08-28 204309" src="https://github.com/user-attachments/assets/094efd18-9d6b-4081-8a13-f717205010c6" />
+
+<img width="1882" height="1029" alt="Screenshot 2025-08-28 204537" src="https://github.com/user-attachments/assets/b1c27857-2f58-4dd8-8170-2fd7d46c4fca" />
+
+---
+
 ## Future Features
 
 To differentiate LiveCollab from traditional platforms like Zoom, the following features are planned:
